@@ -43,10 +43,13 @@ function copiarRespaldo(text) {
 
 export default function App() {
   const videoRef = useRef(null);
+  const imageRef = useRef(null);
+  const fileInputRef = useRef(null);
   const streamRef = useRef(null);
 
   const [modelsReady, setModelsReady] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
+  const [imageSrc, setImageSrc] = useState('');
   const [facing, setFacing] = useState('user'); // facingMode: "user"
   const [busy, setBusy] = useState(false);
   const [vector, setVector] = useState(null);
@@ -110,11 +113,20 @@ export default function App() {
     };
   }, [facing]);
 
-  // 3. Capturar: se analiza el <video> directamente. No se genera ninguna imagen.
+  useEffect(() => () => {
+    if (imageSrc) URL.revokeObjectURL(imageSrc);
+  }, [imageSrc]);
+
+  // 3. Analizar el video o la imagen local seleccionada.
   const capturar = async () => {
-    const video = videoRef.current;
-    if (!video || video.readyState < 2 || !video.videoWidth) {
-      setNotice('La cámara aún no está lista. Espera un segundo e intenta de nuevo.');
+    const source = imageSrc ? imageRef.current : videoRef.current;
+    const sourceReady = imageSrc
+      ? source?.complete && source.naturalWidth > 0
+      : source?.readyState >= 2 && source.videoWidth > 0;
+    if (!sourceReady) {
+      setNotice(imageSrc
+        ? 'La imagen aún no está lista. Selecciona otra imagen e intenta de nuevo.'
+        : 'La cámara aún no está lista. Espera un segundo e intenta de nuevo.');
       return;
     }
     setBusy(true);
@@ -123,7 +135,7 @@ export default function App() {
     setNotice('');
     try {
       const det = await faceapi
-        .detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.6 }))
+        .detectSingleFace(source, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.6 }))
         .withFaceLandmarks()
         .withFaceDescriptor();
 
@@ -167,12 +179,25 @@ export default function App() {
     setNotice('');
   };
 
-  const error = modelError || cameraError;
-  const cargando = !modelsReady || !cameraReady;
+  const seleccionarImagen = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (imageSrc) URL.revokeObjectURL(imageSrc);
+    setImageSrc(URL.createObjectURL(file));
+    setVector(null);
+    setNotice('');
+    setCopied(false);
+    setCopyFailed(false);
+  };
+
+  const error = modelError || (!imageSrc && cameraError);
+  const cargando = !modelsReady || (!cameraReady && !imageSrc);
   const estado = error
     ? error
     : !modelsReady
     ? 'Cargando modelos de reconocimiento…'
+    : imageSrc
+    ? 'Imagen lista. Puedes generar el vector biométrico.'
     : !cameraReady
     ? 'Iniciando cámara…'
     : busy
@@ -189,17 +214,30 @@ export default function App() {
       </header>
 
       <div className="stage">
-        <video
-          ref={videoRef}
-          playsInline
-          autoPlay
-          muted
-          style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
-        />
+        {imageSrc ? (
+          <img ref={imageRef} src={imageSrc} alt="Imagen seleccionada para el análisis facial" />
+        ) : (
+          <video
+            ref={videoRef}
+            playsInline
+            autoPlay
+            muted
+            style={{ transform: facing === 'user' ? 'scaleX(-1)' : 'none' }}
+          />
+        )}
         <div className="guide" aria-hidden="true" />
-        <button className="flip" onClick={() => setFacing((f) => (f === 'user' ? 'environment' : 'user'))}>
-          Girar cámara
-        </button>
+        {imageSrc ? (
+          <button className="flip" onClick={() => {
+            setImageSrc('');
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }}>
+            Usar cámara
+          </button>
+        ) : (
+          <button className="flip" onClick={() => setFacing((f) => (f === 'user' ? 'environment' : 'user'))}>
+            Girar cámara
+          </button>
+        )}
       </div>
 
       <p className={`status ${error ? 'bad' : ''}`} role="status">
@@ -207,8 +245,18 @@ export default function App() {
       </p>
       {notice && <p className="status warn">{notice}</p>}
 
+      <button className="primary" onClick={() => fileInputRef.current?.click()} disabled={!modelsReady || busy || !!modelError}>
+        Subir imagen
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={seleccionarImagen}
+        hidden
+      />
       <button className="primary" onClick={capturar} disabled={cargando || busy || !!modelError}>
-        {busy ? 'Escaneando…' : 'Capturar Rostro'}
+        {busy ? 'Escaneando…' : imageSrc ? 'Generar vector biométrico' : 'Capturar Rostro'}
       </button>
 
       {vector && (
@@ -246,7 +294,7 @@ const css = `
   header h1 { margin:0; font-size:1.35rem; }
   header p { margin:2px 0 0; font-size:.85rem; opacity:.75; }
   .stage { position:relative; aspect-ratio:3/4; background:#000; border-radius:14px; overflow:hidden; }
-  .stage video { width:100%; height:100%; object-fit:cover; }
+  .stage video, .stage img { width:100%; height:100%; object-fit:contain; }
   .guide { position:absolute; inset:12% 18%; border:3px dashed rgba(255,255,255,.8); border-radius:50%; pointer-events:none; }
   .flip { position:absolute; right:10px; bottom:10px; padding:8px 12px; border:0; border-radius:8px;
           background:rgba(255,255,255,.9); color:var(--ink); font-size:.85rem; }
